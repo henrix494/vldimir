@@ -1,22 +1,25 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Threading;
+﻿using System.Collections.Concurrent;
 using System.Timers;
-using Timer = System.Timers.Timer;
 using vladimir;
+using Timer = System.Timers.Timer;
 class Program
 {
-    private static  ConcurrentQueue<Client> Clients = new();
-    private static  Flight Flight = new();
-    private static  Timer DepartureTimer = new(1000); 
+    private static ConcurrentQueue<Client> Clients = new();
+    private static List<Flight> Flights = new();
+    private static int numOfFlight = 3;
+    private static Timer DepartureTimer = new(25000);
     private static Timer? _clientCreationTimer;
-    private static  CancellationTokenSource Cts = new();
-    private static  object ConsoleLock = new();
-    private static  List<Worker> Workers = new();
-
+    private static CancellationTokenSource Cts = new();
+    private static object ConsoleLock = new();
+    private static List<Worker> Workers = new();
+    private static object endLock = new();
+    private static bool isEnd = false;
     static void Main(string[] args)
     {
+        for (int i = 0; i < numOfFlight; i++)
+        {
+            Flights.Add(new Flight());
+        }
         DepartureTimer.Elapsed += DepartureTimerOnElapsed;
         DepartureTimer.AutoReset = false;
         DepartureTimer.Start();
@@ -56,10 +59,10 @@ class Program
 
     private static void StartClientFactory()
     {
-        _clientCreationTimer = new Timer();
+        _clientCreationTimer = new Timer() ;
         _clientCreationTimer.Elapsed += CreateNewClient;
         _clientCreationTimer.Elapsed += ClientCreationTimerRearm;
-        ClientCreationTimerRearm(null, null!);
+       // ClientCreationTimerRearm(null, null!);
         _clientCreationTimer.Start();
     }
 
@@ -72,11 +75,9 @@ class Program
 
     private static void ClientCreationTimerRearm(object? sender, ElapsedEventArgs e)
     {
-        if (_clientCreationTimer != null)
-        {
-            _clientCreationTimer.Interval = new Random().Next(5, 25);
-        }
+            _clientCreationTimer.Interval = Random.Shared.Next(5, 25);
     }
+
 
     private static void SellTickets(object? obj)
     {
@@ -89,13 +90,20 @@ class Program
         {
             if (Clients.TryDequeue(out var client))
             {
-                if (Flight.TryBookSeat(out var cost))
+                bool sold = false;
+                foreach (var flight in Flights)
                 {
-                    worker.ClientsServed++;
-                    worker.Revenue += cost;
-                    LockedWriteLine($"[SellTickets] Worker {worker.Id} sold a ticket to client {client.Id} for ${cost}");
+                    if (flight.TryBookSeat(out var cost))
+                    {
+                        worker.ClientsServed++;
+                        worker.Revenue += cost;
+                        LockedWriteLine($"[SellTickets] Worker {worker.Id} sold a ticket to client {client.Id} for ${cost} on Flight {Flights.IndexOf(flight) + 1}");
+                        sold = true;
+                        break;
+                    }
                 }
-                else
+
+                if (!sold)
                 {
                     EndOfSales("ALL FLIGHTS SOLD OUT");
                     break;
@@ -103,26 +111,34 @@ class Program
             }
             else
             {
-                Thread.Sleep(10); // Avoid busy waiting
+                Thread.Sleep(Random.Shared.Next(5, 25));
             }
         }
-
     }
     private static void EndOfSales(string reason)
     {
-        _clientCreationTimer?.Stop();
-        Cts.Cancel();
-
-        int totalRevenue = 0;
-        int totalClientsServed = 0;
-
-        foreach (var worker in Workers)
+        lock (endLock)
         {
-            totalRevenue += worker.Revenue;
-            totalClientsServed += worker.ClientsServed;
-        }
+            if (isEnd == true)
+            {
+                return;
+            }
 
-        LockedWriteLine($"SALES STOPPED : {reason}");
-        LockedWriteLine($"Total revenue: {totalRevenue}, Clients served total: {totalClientsServed}");
+            _clientCreationTimer?.Stop();
+            Cts.Cancel();
+
+            int totalRevenue = 0;
+            int totalClientsServed = 0;
+
+            foreach (var worker in Workers)
+            {
+                totalRevenue += worker.Revenue;
+                totalClientsServed += worker.ClientsServed;
+            }
+
+            LockedWriteLine($"SALES STOPPED : {reason}");
+            LockedWriteLine($"Total revenue: {totalRevenue}, Clients served total: {totalClientsServed}");
+        }
+        isEnd = true;
     }
 }
